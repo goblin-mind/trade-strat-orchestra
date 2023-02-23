@@ -48,11 +48,12 @@ const sessionContext = {
         [this.wss.CLOSED, this.wss.CLOSING].indexOf(this.wss.readyState) < 0 && this.wss.send(`~m~${length}~m~${m}`);
     },
     rapidFire(msgs) {
+        const self = this;
         msgs.reduce(
             (p, m) =>
                 p
-                    .then(() => new Promise((resolve) => setTimeout(resolve, this.rapidFireInterval)))
-                    .then(() => this.sendM(m)),
+                    .then(() => new Promise((resolve) => setTimeout(resolve, self.rapidFireInterval)))
+                    .then(() => self.sendM(m)),
             Promise.resolve()
         );
     },
