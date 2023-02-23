@@ -38,30 +38,34 @@ const sessionContext = {
     killflag: false,
     rapidFireInterval: 2000,
     hbMessageLen: 20,
-    watchDogPeriod: 90000,
+    watchDogPeriod: 120000,
     results: [],
     socket_host: "",
     logger: console,
     wss: undefined,
-    waitForConnection(callback, interval) {
-        if (this.wss.readyState === 1) {
+    waitForReadyState(callback, interval, ready_state) {
+        if (this.wss.readyState === ready_state) {
             callback();
         } else {
             var self = this;
             setTimeout(function () {
-                self.waitForConnection(callback, interval);
+                self.waitForReadyState(callback, interval, ready_state);
             }, interval);
         }
     },
 
     sendM(m) {
         const self = this;
-        this.waitForConnection(function () {
-            const length = m.replaceAll("\\\\", "\\").length;
-            self.logger.debug(`OUT:~m~${length}~m~${m}`);
-            [self.wss.CLOSED, self.wss.CLOSING].indexOf(self.wss.readyState) < 0 &&
-                self.wss.send(`~m~${length}~m~${m}`);
-        }, 1000);
+        this.waitForReadyState(
+            function () {
+                const length = m.replaceAll("\\\\", "\\").length;
+                self.logger.debug(`OUT:~m~${length}~m~${m}`);
+                [WebSocket.CLOSED, WebSocket.CLOSING].indexOf(self.wss.readyState) < 0 &&
+                    self.wss.send(`~m~${length}~m~${m}`);
+            },
+            5000,
+            WebSocket.OPEN
+        );
     },
     rapidFire(msgs) {
         const self = this;
@@ -83,7 +87,7 @@ const sessionContext = {
         return this.studies[ix].studyPayload.replace(/p":\[("(?:[^"\\]|\\.)*")/, `p":["${this.chart_sess}"`);
     },
     nextStudy() {
-        watchdogtime = new Date().getTime();
+        this.watchdogtime = new Date().getTime();
         const nextStudy = this.getStudyPayload(this.results.length);
         this.logger.warn(`resetting study`);
         if (nextStudy) {
@@ -96,9 +100,9 @@ const sessionContext = {
         const { chart_symbol, interval, end_date } = options;
         const self = this;
 
-        this.logger.info("initializing session", options);
+        this.logger.info("initializing session" + JSON.stringify(options));
         this.wss = new WebSocket(`wss://${socket_host}/socket.io/websocket?date=${end_date}`);
-        let watchdogtime = new Date().getTime();
+        this.watchdogtime = new Date().getTime();
 
         this.wss.onopen = () =>
             self.rapidFire([
@@ -124,7 +128,12 @@ const sessionContext = {
             if (errResponse) {
                 self.logger.warn(`resetting socket`);
                 self.wss.close();
-                self.wss.onclose = () => !self.isStopped() && self.startSession(options);
+                self.wss.onclose = () =>
+                    self.waitForReadyState(
+                        () => !self.isStopped() && self.startSession(options),
+                        5000,
+                        WebSocket.CLOSED
+                    );
                 return;
             }
 
@@ -133,10 +142,10 @@ const sessionContext = {
             if (report) {
                 self.logger.debug("attempting to parse:" + report);
                 var parsedReport = JSON.parse(report.replaceAll("\\", "") + "}}");
-                self.logger.info("parsed:" + JSON.stringify(parsedReport));
+                self.logger.info(JSON.stringify(parsedReport));
                 self.results.push({ parsedReport, params: self.studies[self.results.length].paramCombo });
             }
-            if (new Date().getTime() - watchdogtime > self.watchDogPeriod) {
+            if (new Date().getTime() - self.watchdogtime > self.watchDogPeriod) {
                 self.nextStudy();
             }
         };
@@ -147,7 +156,7 @@ const sessionContext = {
 
 // use your own token to authorize script visibility or stay anonymous
 const auth_token = "unauthorized_user_token";
-// use 'prodata.tradingview.com'  if you're an authentic pro;
+// use 'prodata.tradingview.com'  if you're an authentic pro
 const socket_host = "data.tradingview.com";
 
 const chart_symbol = "BITSTAMP:BTCUSD";
@@ -160,8 +169,7 @@ const number_of_runners = 5;
 // YOU Must *inspect* a client websocket to find this template for YOUR script
 // This will have to be updated any time you update your script source code
 // YOU will have manually replace \ with \\ to properly prepare otherwise you will get wrong_data error
-//it should look like this:
-// `~m~42369~m~{"m":"create_study","p":["cs ..."in_54":{"v":false,"f":true,"t":"bool"},"__user_pro_plan":{"v":"","f":true,"t":"usertype"},"first_visible_bar_time":{"v":1662634800000,"f":true,"t":"integer"}}]}`
+//it should look like this `~m~42369~m~{"m":"create_study","p":["cs ..... blah blah ....true,"t":"float"},"in_54":{"v":false,"f":true,"t":"bool"},"__user_pro_plan":{"v":"","f":true,"t":"usertype"},"first_visible_bar_time":{"v":1662634800000,"f":true,"t":"integer"}}]}`
 const study_template = `CHANGE_ME`;
 
 // variable template - key should match input order in the study starting count from 0
@@ -187,18 +195,19 @@ const sessionManager = {
     numSessions: number_of_runners,
     results: window.reports,
     setup() {
+        const self = this;
         const allstudies = prepareStudies(trimPrefix(study_template), variable_template);
         this.sessions = partition(allstudies, allstudies.length / this.numSessions).map((studies, ix) => {
             const sessObj = Object.create(sessionContext);
             sessObj.studies = studies;
-            if (!this.results[ix]) {
-                this.results[ix] = [];
+            if (!self.results[ix]) {
+                self.results[ix] = [];
             }
-            sessObj.results = this.results[ix];
+            sessObj.results = self.results[ix];
             sessObj.socket_host = socket_host;
             const color = Math.floor(Math.random() * 16777215).toString(16);
             sessObj.logger = {
-                info: (m) => (m) => console.log("%c [" + ix + "] " + m, `color: #${color}`),
+                info: (m) => console.info("%c [" + ix + "] " + m, `color: #${color}`),
                 debug: (m) => console.debug("%c [" + ix + "] " + m, `color: #${color}`),
                 warn: (m) => console.warn("%c [" + ix + "] " + m, `color: #${color}`),
             };
@@ -207,13 +216,14 @@ const sessionManager = {
     },
     start() {
         const self = this;
-        this.sessions.forEach((sess, ix) =>
+        this.sessions.forEach((sess, ix) => {
+            sess.killflag = false;
             sess.startSession({
                 chart_symbol,
                 interval,
                 end_date,
-            })
-        );
+            });
+        });
     },
     stop() {
         this.sessions.forEach((sess) => sess.stop());
