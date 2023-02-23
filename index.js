@@ -100,7 +100,6 @@ const sessionContext = {
                 self.wss.close();
             }
             if (received_msg.length < self.hbMessageLen) {
-                self.logger.debug("OUT:" + received_msg);
                 self.sendM(trimPrefix(received_msg));
             }
 
@@ -108,7 +107,7 @@ const sessionContext = {
             if (errResponse) {
                 self.logger.warn(`resetting socket`);
                 self.wss.close();
-                self.wss.onclose = () => self.isStopped() && startSession(options);
+                self.wss.onclose = () => !self.isStopped() && self.startSession(options);
                 return;
             }
 
@@ -149,11 +148,11 @@ const study_template = `CHANGE_ME`;
 
 // variable template - key should match input order in the study starting count from 0
 const variable_template = {
-    //sets parameter 17 to numbers from 1 to 15 (increment by 2)
+    //set parameter 17 to numbers from 1 to 15 increment by 2
     17: range(1, 15, 2),
     //set parameter 20 to "Hidden" for all combinations
     20: ['"Hidden"'],
-    21: range(1, 5, 1),
+    21: range(2, 5, 1),
     22: range(1, 120, 6),
     25: range(0, 100, 5),
     32: [2.3],
