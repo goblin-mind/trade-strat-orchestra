@@ -21,8 +21,8 @@ const prepareStudies = (defaultTempl, varTempl) =>
 
         const setStudyInput = (ix, val) => {
             studyPayload = studyPayload.replace(
-                new RegExp(`in_${ix}":{"v":(.*(?!,)),"f`, "g"),
-                `in_${ix}":{"v":${val},"f`
+                new RegExp(`in_${ix}":{"v":((?:[^\\,]|\\.)*)`),
+                `in_${ix}":{"v":${val}`
             );
         };
         Object.keys(varTempl).forEach((key, ix) => setStudyInput(key, paramCombo[ix]));
