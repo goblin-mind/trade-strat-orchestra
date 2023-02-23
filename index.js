@@ -42,10 +42,26 @@ const sessionContext = {
     results: [],
     socket_host: "",
     logger: console,
+    wss: undefined,
+    waitForConnection(callback, interval) {
+        if (this.wss.readyState === 1) {
+            callback();
+        } else {
+            var self = this;
+            setTimeout(function () {
+                self.waitForConnection(callback, interval);
+            }, interval);
+        }
+    },
+
     sendM(m) {
-        const length = m.replaceAll("\\\\", "\\").length;
-        this.logger.debug(`OUT:~m~${length}~m~${m}`);
-        [this.wss.CLOSED, this.wss.CLOSING].indexOf(this.wss.readyState) < 0 && this.wss.send(`~m~${length}~m~${m}`);
+        const self = this;
+        this.waitForConnection(function () {
+            const length = m.replaceAll("\\\\", "\\").length;
+            self.logger.debug(`OUT:~m~${length}~m~${m}`);
+            [self.wss.CLOSED, self.wss.CLOSING].indexOf(self.wss.readyState) < 0 &&
+                self.wss.send(`~m~${length}~m~${m}`);
+        }, 1000);
     },
     rapidFire(msgs) {
         const self = this;
@@ -117,7 +133,7 @@ const sessionContext = {
             if (report) {
                 self.logger.debug("attempting to parse:" + report);
                 var parsedReport = JSON.parse(report.replaceAll("\\", "") + "}}");
-                self.logger.info("parsed:" + parsedReport);
+                self.logger.info("parsed:" + JSON.stringify(parsedReport));
                 self.results.push({ parsedReport, params: self.studies[self.results.length].paramCombo });
             }
             if (new Date().getTime() - watchdogtime > self.watchDogPeriod) {
@@ -144,7 +160,8 @@ const number_of_runners = 5;
 // YOU Must *inspect* a client websocket to find this template for YOUR script
 // This will have to be updated any time you update your script source code
 // YOU will have manually replace \ with \\ to properly prepare otherwise you will get wrong_data error
-//it should look like this `~m~42369~m~{"m":"create_study","p":["cs ..... blah blah ....true,"t":"float"},"in_54":{"v":false,"f":true,"t":"bool"},"__user_pro_plan":{"v":"","f":true,"t":"usertype"},"first_visible_bar_time":{"v":1662634800000,"f":true,"t":"integer"}}]}`
+//it should look like this:
+// `~m~42369~m~{"m":"create_study","p":["cs ..."in_54":{"v":false,"f":true,"t":"bool"},"__user_pro_plan":{"v":"","f":true,"t":"usertype"},"first_visible_bar_time":{"v":1662634800000,"f":true,"t":"integer"}}]}`
 const study_template = `CHANGE_ME`;
 
 // variable template - key should match input order in the study starting count from 0
@@ -180,8 +197,11 @@ const sessionManager = {
             sessObj.results = this.results[ix];
             sessObj.socket_host = socket_host;
             const color = Math.floor(Math.random() * 16777215).toString(16);
-            const colorLogger = (m) => console.log("%c " + m, `color: #${color}`);
-            sessObj.logger = { info: colorLogger, debug: colorLogger, warn: colorLogger };
+            sessObj.logger = {
+                info: (m) => (m) => console.log("%c [" + ix + "] " + m, `color: #${color}`),
+                debug: (m) => console.debug("%c [" + ix + "] " + m, `color: #${color}`),
+                warn: (m) => console.warn("%c [" + ix + "] " + m, `color: #${color}`),
+            };
             return sessObj;
         });
     },
