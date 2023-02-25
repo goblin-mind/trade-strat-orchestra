@@ -15,110 +15,95 @@ const partition = (array, n) => (array.length ? [array.splice(0, n)].concat(part
 const shortRandom = () => (Math.random() + 1).toString(36).substring(2);
 
 // Message Utils
-const prepareStudies = (defaultTempl, varTempl) =>
-    cartesian(...Object.values(varTempl)).map((paramCombo) => {
-        let studyPayload = defaultTempl;
-
-        const setStudyInput = (ix, val) => {
-            studyPayload = studyPayload.replace(
-                new RegExp(`in_${ix}":{"v":((?:[^\\,]|\\.)*)`),
-                `in_${ix}":{"v":${val}`
-            );
-        };
-        Object.keys(varTempl).forEach((key, ix) => setStudyInput(key, paramCombo[ix]));
-        return { studyPayload, paramCombo };
-    });
-
 const trimPrefix = (m) => m.match(/~m~.*~m~(.*)/)[1];
 
 // Socket context
-const sessionContext = {
+const socketContext = {
     chart_sess: "cs_" + shortRandom(),
     quote_sess: "qs_" + shortRandom(),
     killflag: false,
-    rapidFireInterval: 2000,
+    socketInterval: 2000,
     hbMessageLen: 20,
-    watchDogPeriod: 120000,
-    results: [],
-    socket_host: "",
+    results: {},
+    studiesFinished: 0,
     logger: console,
-    wss: undefined,
-    waitForReadyState(callback, interval, ready_state) {
-        if (this.wss.readyState === ready_state) {
-            callback();
-        } else {
-            var self = this;
-            setTimeout(function () {
-                self.waitForReadyState(callback, interval, ready_state);
-            }, interval);
-        }
+    waitForReadyState(ready_state) {
+        const self = this;
+        let interval;
+        const isReady = () => self.wss.readyState === ready_state;
+        return isReady()
+            ? Promise.resolve()
+            : new Promise((resolve) => {
+                  interval = setInterval(() => isReady() && clearInterval(interval) && resolve(), self.socketInterval);
+              });
     },
-
     sendM(m) {
+        if (!m) {
+            return;
+        }
         const self = this;
-        this.waitForReadyState(
-            function () {
-                const length = m.replaceAll("\\\\", "\\").length;
-                self.logger.debug(`OUT:~m~${length}~m~${m}`);
-                [WebSocket.CLOSED, WebSocket.CLOSING].indexOf(self.wss.readyState) < 0 &&
-                    self.wss.send(`~m~${length}~m~${m}`);
-            },
-            5000,
-            WebSocket.OPEN
-        );
-    },
-    rapidFire(msgs) {
-        const self = this;
-        msgs.reduce(
-            (p, m) =>
-                p
-                    .then(() => new Promise((resolve) => setTimeout(resolve, self.rapidFireInterval)))
-                    .then(() => self.sendM(m)),
-            Promise.resolve()
-        );
+
+        const length = m.replaceAll("\\\\", "\\").length;
+        self.logger.debug(`OUT:~m~${length}~m~${m}`);
+        self.wss.send(`~m~${length}~m~${m}`);
     },
     stop() {
         this.killflag = true;
+        this.wss.close();
     },
     isStopped() {
         return this.killflag;
     },
     getStudyPayload(ix) {
-        return this.studies[ix].studyPayload.replace(/p":\[("(?:[^"\\]|\\.)*")/, `p":["${this.chart_sess}"`);
+        return (
+            this.studies[ix] &&
+            this.studies[ix].studyPayload &&
+            this.studies[ix].studyPayload.replace(/p":\[("(?:[^"\\]|\\.)*")/, `p":["${this.chart_sess}"`)
+        );
     },
     nextStudy() {
         this.watchdogtime = new Date().getTime();
-        const nextStudy = this.getStudyPayload(this.results.length);
-        this.logger.warn(`resetting study`);
-        if (nextStudy) {
-            this.rapidFire([`{"m":"remove_study","p":["${this.chart_sess}","st6"]}`, nextStudy]);
+        const _nextStudy = this.getStudyPayload(this.studiesFinished);
+        this.logger.debug(`next study`);
+        if (_nextStudy) {
+            this.sendM(_nextStudy);
         } else {
-            wss.close();
+            this.logger.info(`finished ${this.studiesFinished} studies!`);
+            this.stop();
         }
     },
-    startSession(options) {
+    startSession(auth_token) {
+        const self = this;
+        this.waitForReadyState(WebSocket.OPEN).then(
+            [
+                `{"m":"set_auth_token","p":["${auth_token}"]}`,
+                `{"m":"chart_create_session","p":["${this.chart_sess}",""]}`,
+                `{"m":"quote_create_session","p":["${this.quote_sess}"]}`,
+                `{"m":"resolve_symbol","p":["${this.chart_sess}","sds_sym_1","={\\"adjustment\\":\\"splits\\",\\"session\\":\\"regular\\",\\"symbol\\":\\"${chart_symbol}\\"}"]}`,
+                `{"m":"create_series","p":["${this.chart_sess}","sds_1","s1","sds_sym_1","${interval}",300,""]}`,
+                this.getStudyPayload(this.studiesFinished),
+            ].reduce((p, m) => p.then(() => self.sendM(m)), Promise.resolve())
+        );
+    },
+    startSocket(options) {
         const { chart_symbol, interval, end_date } = options;
         const self = this;
 
-        this.logger.info("initializing session" + JSON.stringify(options));
+        this.logger.warn("starting socket" + JSON.stringify(options));
         this.wss = new WebSocket(`wss://${socket_host}/socket.io/websocket?date=${end_date}`);
+
+        this.wss.onopen = () => self.startSession(auth_token);
+
+        this.wss.onclose = () =>
+            self.waitForReadyState(WebSocket.CLOSED).then(() => !self.isStopped() && self.startSocket(options));
+
         this.watchdogtime = new Date().getTime();
-
-        this.wss.onopen = () =>
-            self.rapidFire([
-                `{"m":"set_auth_token","p":["${auth_token}"]}`,
-                `{"m":"chart_create_session","p":["${self.chart_sess}",""]}`,
-                `{"m":"quote_create_session","p":["${self.quote_sess}"]}`,
-                `{"m":"resolve_symbol","p":["${self.chart_sess}","sds_sym_1","={\\"adjustment\\":\\"splits\\",\\"session\\":\\"regular\\",\\"symbol\\":\\"${chart_symbol}\\"}"]}`,
-                `{"m":"create_series","p":["${self.chart_sess}","sds_1","s1","sds_sym_1","${interval}",300,""]}`,
-                self.getStudyPayload(self.results.length),
-            ]);
-
         this.wss.onmessage = (evt) => {
             const received_msg = evt.data;
             self.logger.debug("IN:" + received_msg);
             if (self.isStopped()) {
                 self.wss.close();
+                return;
             }
             if (received_msg.length < self.hbMessageLen) {
                 self.sendM(trimPrefix(received_msg));
@@ -126,15 +111,14 @@ const sessionContext = {
 
             const errResponse = subParagraph(received_msg, "protocol_error", "p");
             if (errResponse) {
-                self.logger.warn(`resetting socket`);
-                self.wss.close();
-                self.wss.onclose = () =>
-                    self.waitForReadyState(
-                        () => !self.isStopped() && self.startSession(options),
-                        5000,
-                        WebSocket.CLOSED
-                    );
+                self.logger.warn(`resetting session`);
+                //self.wss.close();
+                self.startSession(auth_token);
                 return;
+            }
+
+            if (subParagraph(received_msg, "study_deleted", "}}")) {
+                self.nextStudy();
             }
 
             const report = subParagraph(received_msg, 'performance\\":{', "}}");
@@ -143,10 +127,17 @@ const sessionContext = {
                 self.logger.debug("attempting to parse:" + report);
                 var parsedReport = JSON.parse(report.replaceAll("\\", "") + "}}");
                 self.logger.info(JSON.stringify(parsedReport));
-                self.results.push({ parsedReport, params: self.studies[self.results.length].paramCombo });
+                const oldRes =
+                    self.results[JSON.stringify(self.studies[self.studiesFinished].paramCombo).replaceAll('\\"', "")];
+                self.results[JSON.stringify(self.studies[self.studiesFinished].paramCombo).replaceAll('\\"', "")] =
+                    parsedReport;
+                if (!oldRes) {
+                    self.studiesFinished++;
+                }
+                self.sendM(`{"m":"remove_study","p":["${this.chart_sess}","st6"]}`);
             }
             if (new Date().getTime() - self.watchdogtime > self.watchDogPeriod) {
-                self.nextStudy();
+                self.sendM(`{"m":"remove_study","p":["${this.chart_sess}","st6"]}`);
             }
         };
     },
@@ -160,11 +151,11 @@ const auth_token = "unauthorized_user_token";
 const socket_host = "data.tradingview.com";
 
 const chart_symbol = "BITSTAMP:BTCUSD";
-const interval = "60";
+const interval = "1";
 const end_date = "2023_02_21-12_13";
 
 // concurrency on the TV cloud - careful with that one :)
-const number_of_runners = 5;
+const number_of_runners = 100;
 
 // YOU Must *inspect* a client websocket to find this template for YOUR script
 // This will have to be updated any time you update your script source code
@@ -188,37 +179,52 @@ const variable_template = {
 
 if (!window.reports) {
     //using a window variable to maintain results between runs
-    window.reports = [];
+    window.reports = {};
 }
 
 const sessionManager = {
-    numSessions: number_of_runners,
+    numRunners: number_of_runners,
     results: window.reports,
+    prepareStudies(defaultTempl, varTempl) {
+        const self = this;
+        return cartesian(...Object.values(varTempl))
+            .map((paramCombo) => {
+                if (!self.results[JSON.stringify(paramCombo).replaceAll('\\"', "")]) {
+                    let studyPayload = defaultTempl;
+                    const setStudyInput = (ix, val) => {
+                        studyPayload = studyPayload.replace(
+                            new RegExp(`in_${ix}":{"v":((?:[^\\,]|\\.)*)`),
+                            `in_${ix}":{"v":${val}`
+                        );
+                    };
+                    Object.keys(varTempl).forEach((key, ix) => setStudyInput(key, paramCombo[ix]));
+                    return { studyPayload, paramCombo };
+                }
+            })
+            .filter((study) => study);
+    },
     setup() {
         const self = this;
-        const allstudies = prepareStudies(trimPrefix(study_template), variable_template);
-        this.sessions = partition(allstudies, allstudies.length / this.numSessions).map((studies, ix) => {
-            const sessObj = Object.create(sessionContext);
+        const allstudies = this.prepareStudies(trimPrefix(study_template), variable_template);
+        this.sockets = partition(allstudies, allstudies.length / this.numRunners).map((studies, ix) => {
+            const sessObj = Object.create(socketContext);
             sessObj.studies = studies;
-            if (!self.results[ix]) {
-                self.results[ix] = [];
-            }
-            sessObj.results = self.results[ix];
-            sessObj.socket_host = socket_host;
+            sessObj.results = self.results;
+
             const color = Math.floor(Math.random() * 16777215).toString(16);
             sessObj.logger = {
-                info: (m) => console.info("%c [" + ix + "] " + m, `color: #${color}`),
-                debug: (m) => console.debug("%c [" + ix + "] " + m, `color: #${color}`),
-                warn: (m) => console.warn("%c [" + ix + "] " + m, `color: #${color}`),
+                info: (m) => console.info("%c [runner-" + ix + "] " + m, `color: #${color}`),
+                debug: (m) => console.debug("%c [runner-" + ix + "] " + m, `color: #${color}`),
+                warn: (m) => console.warn("%c [runner-" + ix + "] " + m, `color: #${color}`),
             };
             return sessObj;
         });
     },
     start() {
         const self = this;
-        this.sessions.forEach((sess, ix) => {
+        this.sockets.forEach((sess, ix) => {
             sess.killflag = false;
-            sess.startSession({
+            sess.startSocket({
                 chart_symbol,
                 interval,
                 end_date,
@@ -226,17 +232,24 @@ const sessionManager = {
         });
     },
     stop() {
-        this.sessions.forEach((sess) => sess.stop());
+        this.sockets.forEach((sess) => sess.stop());
     },
-    /*
-        Returns a 2d array of parameters and corresponding results
-        params:[5, '"Hidden"', 4, 25, 0, 2.3],
-        parsedReport: {all: {…}, long: {…}, maxStrategyDrawDown: 635.1133570000002, openPL: -102.501472, buyHoldReturn: -438.03500819999994, …}
-    */
     getResults() {
         return this.results;
     },
 };
 
-sessionManager.setup();
-sessionManager.start();
+const start = () => {
+    sessionManager.setup();
+    sessionManager.start();
+    return "Simulation Started!";
+};
+
+const stop = () => {
+    sessionManager.stop();
+    return "Simulation Stopped.";
+};
+
+("Tradingview Strategy Orchestrator - Loaded");
+
+start();
