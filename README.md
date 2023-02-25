@@ -1,8 +1,9 @@
 # tradingview-strategy-tester
 This tool will help you easily test input combinations for your tradingview strategies
 
-for example you can run 200,000 combinations of parameters and get the pnl and statistics within a few hours
+for example you can run 200,000 combinations of parameters and get the pnl and statistics within minutes!!
 ![](https://i.ibb.co/yqpD115/ezgif-5-f3028764a3.gif)
+
 
 ## Description
  - this tool will allow you to define parameter ranges for a given strategy
