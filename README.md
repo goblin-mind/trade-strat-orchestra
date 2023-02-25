@@ -1,4 +1,4 @@
-# tradingview-strategy-tester
+# Tradingview Strategy Orchestrator
 This tool will help you easily test input combinations for your tradingview strategies
 
 for example you can run 200,000 combinations of parameters and get the pnl and statistics within minutes!!
