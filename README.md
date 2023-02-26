@@ -14,12 +14,13 @@ for example you can run 200,000 combinations of parameters and get the pnl and s
  - create a snippet in your chrome devtools
  - paste the code there
  - run it while on tradingview.com tab
- - use `sessionManager.stop()` in console to stop the simulation and `sessionManager.getResults()` to get the result matrix
+ - results can be accessed in realtime from the `window.reports` object where the key is the study parameters combination
+ - use `stop()` in console to stop the simulation
 
 ## Dependencies
  - none! this should work on your browser out of the box and uses no 3rd party libraries
 
- ### acquiring study template
+ ### acquiring study template :warning: this is the hard part :warning:
   - you will need to populate the study template
   - you can use websocket inspection such as chrome dev-tools network tab to inspect "create_strategy" message for your strategy
   - you can paste the message to the code as-is but you will need to escape \ characters first
