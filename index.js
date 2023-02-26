@@ -155,7 +155,7 @@ const interval = "1";
 const end_date = "2023_02_21-12_13";
 
 // concurrency on the TV cloud - careful with that one :)
-const number_of_runners = 100;
+const number_of_runners = 35;
 
 // YOU Must *inspect* a client websocket to find this template for YOUR script
 // This will have to be updated any time you update your script source code
