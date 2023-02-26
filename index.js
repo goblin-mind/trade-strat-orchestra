@@ -23,6 +23,7 @@ const socketContext = {
     quote_sess: "qs_" + shortRandom(),
     killflag: false,
     socketInterval: 2000,
+    watchDogPeriod: 30000,
     hbMessageLen: 20,
     results: {},
     studiesFinished: 0,
