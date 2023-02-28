@@ -78,7 +78,7 @@ const _StudyRunner = {
         const _consumeStudy = this.getStudyPayload(this.studiesFinished);
         if (_consumeStudy) {
             this.sendM(_consumeStudy);
-            this.logger.info(
+            this.logger.debug(
                 `Study_${this.studiesFinished} Started -  ${
                     this.studies.length - this.studiesFinished - 1
                 } remaining -- Duration(s):${(new Date().getTime() - this.studyStartTs) / 1000} Session Time(s):${
@@ -137,11 +137,18 @@ const _StudyRunner = {
 
                 self.sendM(`{"m":"remove_study","p":["${this.chart_sess}","st6"]}`);
                 self.logger.info(
-                    `Study_${self.studiesFinished} Finished -  ${
-                        self.studies.length - self.studiesFinished - 1
-                    } remaining -- Duration(s):${(new Date().getTime() - self.studyStartTs) / 1000} Session Time(s):${
+                    `Study_${self.studiesFinished} Finished - Net profit: ${Math.round(
+                        parsedReport.all.netProfitPercent * 100
+                    )}% - session progress:${Math.round(
+                        (1 - (self.studies.length - self.studiesFinished - 1) / self.studies.length) * 100
+                    )}% -- Duration(s):${(new Date().getTime() - self.studyStartTs) / 1000} Session Time(s):${
                         (new Date().getTime() - self.startTs) / 1000
-                    }`
+                    } - ETA: ${Math.round(
+                        ((1 / (1 - (self.studies.length - self.studiesFinished - 1) / self.studies.length)) *
+                            (new Date().getTime() - self.startTs)) /
+                            1000 /
+                            60
+                    )} minutes`
                 );
                 self.studiesFinished++;
                 if (oldRes) {
@@ -216,29 +223,78 @@ function StudyRunner(options) {
     return self;
 }
 
+const auth_token = "unauthorized_user_token";
+const socket_host = "data.tradingview.com"; //'prodata.tradingview.com'
+
+const number_of_runners = 35;
+
+// YOU Must *inspect* a client websocket to find this template for YOUR script
+// This will have to be updated any time you update your script source code
+// YOU will have manually replace \ with \\ to properly prepare otherwise you will get wrong_data error
+// it should look like this `~m~42369~m~{"m":"create_study","p":["cs ..... blah blah ....true,"t":"float"},"in_54":{"v":false,"f":true,"t":"bool"},"__user_pro_plan":{"v":"","f":true,"t":"usertype"},"first_visible_bar_time":{"v":1662634800000,"f":true,"t":"integer"}}]}`
+const study_template = `CHANGE_ME`;
+
+// variable template - key should match input order in the study starting count from 0
+const variable_template = {
+    0: ["true", "false"],
+    1: ["true", "false"],
+    2: ["true", "false"],
+    3: ["true", "false"],
+    4: ["true", "false"],
+    5: ["true", "false"],
+    6: ["true", "false"],
+    7: ["true", "false"],
+    8: ["true", "false"],
+    9: ["true", "false"],
+    10: ["true", "false"],
+    11: ["true", "false"],
+    12: ["true", "false"],
+    15: [3],
+    18: ['"Hidden"', '"Regular"', '"Regular/Hidden"'],
+    19: range(1, 4, 1),
+    20: range(20, 50, 10),
+};
+
 const analytics = {
     getFeasibleStrats(
-        allStrats,
-        sortCritera = "netProfit",
-        filterCriteria = { totalTrades: 15, avgTradePercent: 0.05, sharpeRatio: 0.5, avgBarsInTrade: 20 * 24 }
+        source,
+        query = {
+            sortCritera: "netProfit",
+            filterCriteria: { totalTrades: 15, avgTradePercent: 0.05, sharpeRatio: 0.5, avgBarsInTrade: 20 * 24 },
+            sortAgg: "some",
+            filtAgg: "some",
+            limit: 1000,
+        }
     ) {
-        var self = this;
-        const results = [];
+        const { sortCritera, filterCriteria, sortAgg, filtAgg, limit } = query;
+
+        const result = [];
         let i = 0;
-        Object.keys(this.results).forEach((ix) => {
-            if (self.results[ix]) {
-                results[i++] = { params: ix, result: self.results[ix] };
+        Object.keys(source[0]).forEach((ix) => {
+            if (source[0][ix]) {
+                result[i++] = { params: ix, results: Object.keys(source).map((sk) => source[sk][ix]) };
             }
         });
-        return results
-            .sort((a, b) => b.result.all[criteria] - a.result.all[criteria])
-            .filter(
-                (it) =>
-                    it.result.all.avgBarsInTrade < filterCriteria.avgBarsInTrade &&
-                    it.result.all.totalTrades > filterCriteria.totalTrades &&
-                    it.result.all.avgTradePercent > filterCriteria.avgTradePercent &&
-                    it.result.sharpeRatio > filterCriteria.sharpeRatio
-            );
+        return result
+            .sort((a, b) =>
+                Object.keys(source)[sortAgg](
+                    (sk) =>
+                        a.results[sk] &&
+                        b.results[sk] &&
+                        b.results[sk].all[sortCritera] - a.results[sk].all[sortCritera]
+                )
+            )
+            .filter((it) =>
+                Object.keys(source)[filtAgg](
+                    (sk) =>
+                        it.results[sk] &&
+                        it.results[sk].all.avgBarsInTrade < filterCriteria.avgBarsInTrade &&
+                        it.results[sk].all.totalTrades > filterCriteria.totalTrades &&
+                        it.results[sk].all.avgTradePercent > filterCriteria.avgTradePercent &&
+                        it.results[sk].sharpeRatio > filterCriteria.sharpeRatio
+                )
+            )
+            .slice(0, limit);
     },
 };
 
@@ -327,50 +383,25 @@ function StratManager(variableTemplate, studyTemplate, numRunners = 1, results =
     return self;
 }
 
-// Entry Point -  You will have to modify values below this line
-const auth_token = "unauthorized_user_token";
-const socket_host = "data.tradingview.com"; //'prodata.tradingview.com'
-const number_of_runners = 35;
-
-// You Must *inspect* a client websocket to find this template for YOUR script
-// you will have manually replace \ with \\ to properly prepare otherwise you will get wrong_data error
-// it should look like this `~m~42369~m~{"m":"create_study","p":["cs ..... blah blah ....true,"t":"float"},"in_54":{"v":false,"f":true,"t":"bool"},"__user_pro_plan":{"v":"","f":true,"t":"usertype"},"first_visible_bar_time":{"v":1662634800000,"f":true,"t":"integer"}}]}`
-const study_template = `CHANGE_ME`
-
-// variable template - key should match input order in the study starting count from 0
-const variable_template = {
-    0: ["false"],
-    1: ["false"],
-    2: ["false"],
-    3: ["false"],
-    4: ["true", "false"],
-    5: ["false"],
-    6: ["false"],
-    7: ["false"],
-    8: ["false"],
-    9: ["false"],
-    10: ["true", "false"],
-    11: ["false"],
-    12: ["false"],
-    15: [3],
-    18: ['"Hidden"', '"Regular"', '"Regular/Hidden"'],
-    19: range(1, 2, 1),
-    20: range(1, 50, 6),
-};
+if (!window.reports) {
+    window.reports = [];
+}
 
 const start = () => {
-    if (!window.reports) {
-        window.reports = [];
-    }
-
-    stratManager = new StratManager(variable_template, study_template, number_of_runners, window.reports, console);
+    const stratManager = new StratManager(
+        variable_template,
+        study_template,
+        number_of_runners,
+        window.reports,
+        console
+    );
 
     stratManager
         .start([
             { chart_symbol: "BINANCE:BTCUSD", interval: "60" },
             { chart_symbol: "TVC:GOLD", interval: "60" },
         ])
-        .then(() => console.log(JSON.stringify(stratManager.getResults())));
+        .then(() => console.log(JSON.stringify(analytics.getFeasibleStrats(stratManager.getResults()))));
     return "Simulation Started!";
 };
 
