@@ -321,7 +321,7 @@ function StratManager(variableTemplate, studyTemplate, numRunners = 1, results =
 
     self.numRunners = numRunners;
     self.results = results;
-    self.allstudies = [self.prepareStudies(trimPrefix(studyTemplate), variableTemplate)[0]];
+    self.allstudies = self.prepareStudies(trimPrefix(studyTemplate), variableTemplate);
     self.logger = logger;
 
     return self;
