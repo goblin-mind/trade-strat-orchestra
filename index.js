@@ -1,42 +1,43 @@
 // Collection Utils
-const subParagraph = (paragraph, startWord, endWord) => {
-    const startIdx = paragraph.indexOf(startWord);
-    if (startIdx < 0) {
-        return undefined;
-    }
-    if (!endWord) {
-        return startIdx > -1;
-    }
-    const startLen = startWord.replaceAll("\\", "").length;
-    const endIdx = paragraph.indexOf(endWord, startIdx + startLen);
-    return paragraph.substring(startIdx + startLen, endIdx);
-};
-
-function* cartesianProduct(...arrays) {
-    if (arrays.length === 0) {
-        yield [];
-    } else {
-        const [head, ...tail] = arrays;
-        for (const h of head) {
-            for (const t of cartesianProduct(...tail)) {
-                yield [h, ...t];
+const CollectionUtils = {
+    subParagraph(paragraph, startWord, endWord) {
+        const startIdx = paragraph.indexOf(startWord);
+        if (startIdx < 0) {
+            return undefined;
+        }
+        if (!endWord) {
+            return startIdx > -1;
+        }
+        const startLen = startWord.replaceAll("\\", "").length;
+        const endIdx = paragraph.indexOf(endWord, startIdx + startLen);
+        return paragraph.substring(startIdx + startLen, endIdx);
+    },
+    *cartesianProduct(...arrays) {
+        if (arrays.length === 0) {
+            yield [];
+        } else {
+            const [head, ...tail] = arrays;
+            for (const h of head) {
+                for (const t of CollectionUtils.cartesianProduct(...tail)) {
+                    yield [h, ...t];
+                }
             }
         }
-    }
-}
+    },
+    createRangeArray(start, end, step = 1) {
+        return Array.from({ length: Math.ceil((end - start) / step) }, (_, i) => start + i * step);
+    },
 
-const createRangeArray = (start, end, step = 1) =>
-    Array.from({ length: Math.ceil((end - start) / step) }, (_, i) => start + i * step);
-
-const partition = (array, n) => (array.length ? [array.splice(0, n), ...partition(array, n)] : []);
-
-const getMessageBody = (message) => {
-    const [, body] = message.match(/~m~.*~m~(.*)/) || [];
-    return body;
+    partition(array, n) {
+        return array.length ? [array.splice(0, n), ...CollectionUtils.partition(array, n)] : [];
+    },
+    generateRandomString(length) {
+        return Array.from(
+            { length },
+            () => "abcdefghijklmnopqrstuvwxyz0123456789"[Math.floor(Math.random() * 36)]
+        ).join("");
+    },
 };
-
-const generateRandomString = (length) =>
-    Array.from({ length }, () => "abcdefghijklmnopqrstuvwxyz0123456789"[Math.floor(Math.random() * 36)]).join("");
 
 // Analytics
 const AnalyticsUtils = {
@@ -132,13 +133,8 @@ const AnalyticsUtils = {
     },
 };
 
-
 // Socket Context
 const _SocketMessenger = {
-    rejectors: [],
-    maxReconnects: 5,
-    reconnects: 0,
-    isReady: false,
     _waitForReady(isReady) {
         const self = this;
         let interval;
@@ -146,12 +142,14 @@ const _SocketMessenger = {
             ? Promise.resolve()
             : new Promise((resolve, reject) => {
                   self.rejectors.push(reject);
-                  interval = setInterval(() => {
-                      if (isReady()) {
-                          clearInterval(interval);
-                          self.rejectors = self.rejectors.filter((rej) => rej != reject);
-                          resolve();
-                      }
+                  setTimeout(() => {
+                      interval = setInterval(() => {
+                          if (isReady()) {
+                              clearInterval(interval);
+                              self.rejectors = self.rejectors.filter((rej) => rej != reject);
+                              resolve();
+                          }
+                      }, self.socketInterval);
                   }, self.socketInterval);
               });
     },
@@ -168,7 +166,7 @@ const _SocketMessenger = {
             self.rejectors.push(reject);
             handler = (evt) => {
                 const { data: msg } = evt;
-                if (subParagraph(msg, condmsg)) {
+                if (CollectionUtils.subParagraph(msg, condmsg)) {
                     self.rejectors = self.rejectors.filter((rej) => rej != reject);
                     resolve(msg);
                 }
@@ -180,7 +178,10 @@ const _SocketMessenger = {
             return m;
         });
     },
-
+    getMessageBody(message) {
+        const [, body] = message.match(/~m~.*~m~(.*)/) || [];
+        return body;
+    },
     sendM(m) {
         if (!m) {
             return;
@@ -201,7 +202,7 @@ const _SocketMessenger = {
             const { logger, hbMessageLen } = self;
             logger.debug(`IN: ${msg}`);
 
-            const error = subParagraph(msg, "protocol_error");
+            const error = CollectionUtils.subParagraph(msg, "protocol_error");
             if (error || self.killflag) {
                 if (error) logger.warn("Protocol Error");
                 self.wss.close();
@@ -209,14 +210,14 @@ const _SocketMessenger = {
             }
 
             if (msg.length < hbMessageLen) {
-                self.sendM(getMessageBody(msg));
+                self.sendM(self.getMessageBody(msg));
             }
         };
 
         this.killflag = false;
         this.wss.onclose = () => {
             self.isReady = false;
-            self.rejectors.forEach((reject) => reject("socket dropped"));
+            self.rejectors.forEach((reject) => reject("socketmessenger.socket_dropped"));
             self.rejectors = [];
             if (!self.killflag && self.reconnects < self.maxReconnects) {
                 self.reconnects++;
@@ -233,6 +234,9 @@ const _SocketMessenger = {
             .then(() => self.socketReceivedgMessage("session_id"))
             .then(() => {
                 self.isReady = true;
+            })
+            .catch((e) => {
+                if (e !== "socketmessenger.socket_dropped") throw e;
             });
     },
 
@@ -243,9 +247,15 @@ const _SocketMessenger = {
 };
 function SocketMessenger(options) {
     const self = Object.create(_SocketMessenger);
-    const { socket_host, logger, init_commands } = options;
+    const { socket_host, logger, init_commands, socketInterval } = options;
+
     self.logger = logger;
     self.init_commands = init_commands;
+    self.socketInterval = socketInterval;
+    self.rejectors = [];
+    self.maxReconnects = 5;
+    self.reconnects = 0;
+    self.isReady = false;
     self.openSocket({ socket_host });
 
     return self;
@@ -253,20 +263,8 @@ function SocketMessenger(options) {
 
 // Runner Context
 const _StudyRunner = {
-    chart_sess: "cs_" + generateRandomString(10),
-    quote_sess: "qs_" + generateRandomString(10),
-    killflag: false,
-    socketInterval: 5000,
-    watchDogPeriod: 90000,
-    hbMessageLen: 20,
-    results: {},
-    studiesFinished: 0,
-    logger: console,
-    startTs: 0,
-    studyStartTs: 0,
-
     getStudyPayload(paramCombo) {
-        let studyPayload = this.defaultTempl;
+        let studyPayload = this.socketMessenger.getMessageBody(this.defaultTempl);
         const setStudyInput = (ix, val) => {
             if (typeof val == "boolean" && !val) {
                 return;
@@ -291,7 +289,7 @@ const _StudyRunner = {
                 (new Date().getTime() - studyStartTs) / 1000
             } Session Time(s):${(new Date().getTime() - startTs) / 1000} - session progress:${Math.round(
                 sessionProgress
-            )}% - Runner ETA: ${eta} minutes`
+            )}% - Series ETA: ${eta} minutes`
         );
     },
     startRunner() {
@@ -330,16 +328,17 @@ const _StudyRunner = {
                         Promise.any([
                             self.socketMessenger.socketReceivedgMessage("performance").then((msg) => {
                                 const parsedReport = JSON.parse(
-                                    subParagraph(msg, 'performance\\":{', "}}").replaceAll("\\", "") + "}}"
+                                    CollectionUtils.subParagraph(msg, 'performance\\":{', "}}").replaceAll("\\", "") +
+                                        "}}"
                                 );
                                 self.results[cacheKey] = parsedReport;
                                 self.logStatus(
                                     `Finished - Net profit: ${Math.round(parsedReport.all.netProfitPercent * 100)}%`
                                 );
                             }),
-                            new Promise((resolve) => {
+                            new Promise((resolve, reject) => {
                                 setTimeout(() => {
-                                    resolve();
+                                    reject("studyrunner.studytimeout");
                                 }, self.watchDogPeriod);
                             }),
                         ])
@@ -350,9 +349,20 @@ const _StudyRunner = {
                 await socketMessenger.socketReceivedgMessage("study_deleted");
                 this.studiesFinished++;
             } catch (e) {
-                if (e.name === "AggregateError") {
+                if (self.killflag) {
+                    break;
+                } else if (e === "studyrunner.studytimeout") {
+                    socketMessenger.sendM(`{"m":"remove_study","p":["${this.chart_sess}","st6"]}`);
+                    await socketMessenger.socketReceivedgMessage("study_deleted");
+                    continue;
+                } else if (
+                    e.name === "AggregateError" ||
+                    e === "socketmessenger.socket_dropped" ||
+                    (e.name === "InvalidStateError" && e.code === 11)
+                ) {
                     //retry
-                    this.logStatus("Socket Dropped - Retrying Study");
+                    this.logStatus("Retrying Study");
+                    continue;
                 } else {
                     throw e;
                 }
@@ -365,8 +375,13 @@ const _StudyRunner = {
 };
 function StudyRunner(options) {
     const self = Object.create(_StudyRunner);
-    const { results, logger, paramCombos, chart_symbol, interval, defaultTempl,auth_token,socket_host } = options;
-
+    const { results, logger, paramCombos, chart_symbol, interval, defaultTempl, auth_token, socket_host } = options;
+    (self.chart_sess = "cs_" + CollectionUtils.generateRandomString(10)),
+        (self.quote_sess = "qs_" + CollectionUtils.generateRandomString(10)),
+        (self.watchDogPeriod = 90000),
+        (self.hbMessageLen = 20),
+        (self.startTs = 0),
+        (self.studyStartTs = 0);
     self.results = results;
     self.logger = logger;
     self.killflag = false;
@@ -380,56 +395,63 @@ function StudyRunner(options) {
         `{"m":"resolve_symbol","p":["${self.chart_sess}","sds_sym_1","={\\"adjustment\\":\\"splits\\",\\"session\\":\\"regular\\",\\"symbol\\":\\"${chart_symbol}\\"}"]}`,
         `{"m":"create_series","p":["${self.chart_sess}","sds_1","s1","sds_sym_1","${interval}",300,""]}`,
     ];
-    self.socketMessenger = new SocketMessenger({ socket_host, logger, init_commands: self.init_commands });
+    self.socketMessenger = new SocketMessenger({
+        socket_host,
+        logger,
+        init_commands: self.init_commands,
+        socketInterval: 5000,
+    });
     return self;
 }
 
-
 // Simulation Context
 const _SimulationManager = {
-    runners: [],
-    start(optionsList = [{ chart_symbol: "BINANCE:BTCUSD", interval: "60" }]) {
+    start(seriesDefs = [{ chart_symbol: "BINANCE:BTCUSD", interval: "60" }]) {
         var self = this;
-        const allParamCombos = [...cartesianProduct(...Object.values(self.variableTemplate))];
+        const allParamCombos = [...CollectionUtils.cartesianProduct(...Object.values(self.variableTemplate))];
         return Promise.all(
-            partition(allParamCombos, allParamCombos.length / Math.min(allParamCombos.length, self.numRunners)).map(
-                (paramCombos, ixs) => {
-                    const color = Math.floor(Math.random() * 16777215).toString(16);
+            CollectionUtils.partition(
+                allParamCombos,
+                allParamCombos.length / Math.min(allParamCombos.length, self.numRunners)
+            ).map((paramCombos, ixs) => {
+                const color = Math.floor(Math.random() * 16777215).toString(16);
 
-                    return optionsList.reduce((p, options, ixo) => {
-                        const _logger = {};
-                        ["info", "debug", "warn"].forEach((fk) => {
-                            _logger[fk] = (m) => {
-                                self.logger[fk](
-                                    "%c [runner-" + ixs + "-" + Object.values(options).join("-") + "] " + m,
-                                    `color: #${color}`
-                                );
-                            };
-                        });
+                return seriesDefs.reduce((p, seriesDef, ixo) => {
+                    if (!seriesDef) {
+                        return Promise.resolve();
+                    }
+                    const _logger = {};
+                    ["info", "debug", "warn"].forEach((fk) => {
+                        _logger[fk] = (m) => {
+                            self.logger[fk](
+                                "%c [runner-" + ixs + "-" + Object.values(seriesDef).join("-") + "] " + m,
+                                `color: #${color}`
+                            );
+                        };
+                    });
 
-                        return p.then(() => {
-                            if (!self.results[ixo]) {
-                                self.results[ixo] = {};
-                            }
-                            self.runners[ixs] = new StudyRunner({
-                                results: self.results[ixo],
-                                logger: _logger,
-                                paramCombos: paramCombos,
-                                chart_symbol: options.chart_symbol,
-                                interval: options.interval,
-                                defaultTempl: self.studyTemplate,
-                                socket_host: self.socket_host,
-                                auth_token: self.auth_token
-                            });
-                            return self.runners[ixs].startRunner();
+                    return p.then(() => {
+                        if (!self.results[ixo]) {
+                            self.results[ixo] = {};
+                        }
+                        self.runners[ixs] = new StudyRunner({
+                            results: self.results[ixo],
+                            logger: _logger,
+                            paramCombos: paramCombos,
+                            chart_symbol: seriesDef.chart_symbol,
+                            interval: seriesDef.interval,
+                            defaultTempl: self.studyTemplate,
+                            socket_host: self.socket_host,
+                            auth_token: self.auth_token,
                         });
-                    }, Promise.resolve());
-                }
-            )
+                        return self.runners[ixs].startRunner();
+                    });
+                }, Promise.resolve());
+            })
         ).then(() => self);
     },
     stop() {
-        this.runners.forEach((sess) => sess.stop());
+        this.runners.forEach((runner) => runner.stop());
     },
     getResults() {
         return this.results.flat();
@@ -437,44 +459,41 @@ const _SimulationManager = {
 };
 
 function SimulationManager(
-    options={variableTemplate:[],
-    studyTemplate:'',
-    numRunners: 1,
-    results : window.reports,
-    logger :console}
+    options = { variableTemplate: [], studyTemplate: "", numRunners: 1, results: window.reports, logger: console }
 ) {
     const self = Object.create(_SimulationManager);
-    const {auth_token,socket_host,variableTemplate,studyTemplate,results,numRunners,logger} = options;
+    const { auth_token, socket_host, variableTemplate, studyTemplate, results, numRunners, logger } = options;
 
     self.numRunners = numRunners;
     self.results = results;
-    self.studyTemplate = getMessageBody(studyTemplate);
+    self.studyTemplate = studyTemplate;
     self.variableTemplate = variableTemplate;
     self.logger = logger;
     self.auth_token = auth_token;
     self.socket_host = socket_host;
+    self.runners = [];
 
     return self;
 }
 
 // Application context
 const start = () => {
-    
     const auth_token = "unauthorized_user_token";
-    const socket_host = "data.tradingview.com"; //'prodata.tradingview.com'
+    // if authorized to pro user - you can use 'prodata.tradingview.com' for running longer strats
+    const socket_host = "data.tradingview.com"; 
 
     const numRunners = 15;
-
-    // YOU Must *inspect* a client websocket to find this template for YOUR script
-    // This will have to be updated any time you update your script source code
-    // YOU will have manually replace \ with \\ to properly prepare otherwise you will get wrong_data error
-    // it should look like this `~m~42369~m~{"m":"create_study","p":["cs ..... blah blah ....true,"t":"float"},"in_54":{"v":false,"f":true,"t":"bool"},"__user_pro_plan":{"v":"","f":true,"t":"usertype"},"first_visible_bar_time":{"v":1662634800000,"f":true,"t":"integer"}}]}`
-    const studyTemplate = `CHANGE_ME`
     
+    // Provide a socket message describing your pinescript and features here
+    // use network inspector to retrieve that message
+    // note: update any time you update your pinescript
+    // note: you may have to replace \ with \\ to properly prepare otherwise you will get 'wrong_data' error
+    // example: it should look like this `~m~10436~m~{"m":"create_study" ...}`
+    const studyTemplate = `CHANGE_ME`
     // variable template - key should match input order in the study starting count from 0
     const variableTemplate = {
-        0: ["false"],
-        1: ["true"],
+        0: ["true"],
+        1: ["false"],
         2: ["false"],
         3: ["false"],
         4: ["false"],
@@ -492,22 +511,30 @@ const start = () => {
         16: [false],
         17: [false],
         18: ['"Hidden"', '"Regular"', '"Regular/Hidden"'],
-        19: [1], //createRangeArray(1, 4, 1),
-        20: [30], //createRangeArray(20, 50, 10),
-        21: createRangeArray(4, 20, 2),
-        22: createRangeArray(16, 60, 3),
+        19: [1],
+        20: [30],
+        21: CollectionUtils.createRangeArray(4, 20, 2),
+        22: CollectionUtils.createRangeArray(16, 60, 3),
     };
 
     if (!window.reports) {
         window.reports = [];
     }
 
-    window.simulationManager = new SimulationManager({variableTemplate, studyTemplate, numRunners, results:window.reports, logger:console,socket_host,auth_token})
+    window.simulationManager = new SimulationManager({
+        variableTemplate,
+        studyTemplate,
+        numRunners,
+        results: window.reports,
+        logger: console,
+        socket_host,
+        auth_token,
+    });
+
+    return window.simulationManager
         .start([
-            { chart_symbol: "BINANCE:BTCUSD", interval: "60" },
-            { chart_symbol: "BINANCE:BTCUSDT", interval: "60" },
-            // { chart_symbol: "BINANCE:BTCUSD", interval: "1" },
-            // { chart_symbol: "BINANCE:BTCUSDT", interval: "1" },
+            { chart_symbol: "BINANCE:BTCUSD", interval: "240" },
+            { chart_symbol: "BINANCE:BTCUSDT", interval: "240" },
         ])
         .then((sm) => {
             window.topRuns = AnalyticsUtils.getFeasibleStrats(sm.getResults());
@@ -515,16 +542,10 @@ const start = () => {
                 window.topParams = AnalyticsUtils.analyzeParams(window.topRuns);
             }
         });
-    
-    return window.simulationManager
 };
 
 const stop = () => {
-    window.simulationManager.stop();
-    return "Simulation Stopped.";
+    return window.simulationManager.stop();
 };
 
-
-start().then(() =>
-    console.log(JSON.stringify(AnalyticsUtils.getFeasibleStrats(simulationManager.getResults())))
-);
+start().then(() => console.log(JSON.stringify(AnalyticsUtils.getFeasibleStrats(simulationManager.getResults()))));
